@@ -3,15 +3,15 @@
 Hệ thống giám sát trọng tải xe (Trạm cân PTIT) trên **LattePanda V1**:
 
 - `firmware/` – firmware cho **Arduino Leonardo onboard** (ATmega32U4): load cell + HX711, LED matrix MAX7219, WS2812B, servo barrier, joystick.
-- `launcher/` – dịch vụ **Go** chạy native trên LattePanda: đọc sự kiện từ Arduino qua serial → chụp ảnh camera USB → lưu SQLite → gửi cảnh báo Telegram.
+- `launcher/` – dịch vụ **Go** chạy native trên LattePanda: đọc sự kiện từ Arduino qua serial → chụp ảnh camera USB → đẩy cảnh báo vào hàng đợi RAM → gửi Telegram. Không dùng DB.
 - `tools/` – script build/nạp/triển khai từ Mac lên board và unit systemd.
 
 ```
 Load cell ─ HX711 ─┐
 Joystick ──────────┤  Arduino Leonardo ──USB serial 115200──▶ launcher (Go, systemd)
 Servo / MAX7219 / ─┘   (firmware/)                             ├─ Camera USB (GStreamer → /dev/shm)
-WS2812B                                                        ├─ SQLite  (data/events.db + data/images/)
-                                                               └─ Telegram (outbox, gửi bù khi mất mạng)
+WS2812B                                                        ├─ Ảnh sự kiện (data/images/)
+                                                               └─ Telegram (hàng đợi RAM, giới hạn QUEUE_SIZE)
 ```
 
 ## Firmware (`firmware/main/main.ino`)
@@ -45,20 +45,24 @@ Host → MCU: `PING`, `TH,<kg>` (ngưỡng quá tải), `TARE`, `CAL,<kg>`, `GAT
 
 ## Launcher (`launcher/`)
 
-Go, build tĩnh `CGO_ENABLED=0` (SQLite thuần Go `modernc.org/sqlite`) → chạy được trên Ubuntu 16.04 của board, không cần cài thêm thư viện.
+Go, build tĩnh `CGO_ENABLED=0` → chạy được trên Ubuntu 16.04 của board, không cần cài thêm thư viện.
 
 | File | Vai trò |
 |---|---|
 | `main.go` | Khởi động các thành phần |
 | `serial.go` | Kết nối serial termios, tự mở lại khi rút cáp / MCU reset / nạp firmware |
-| `scale.go` | Xử lý dòng `W` / `EV` – chụp ảnh và ghi sự kiện |
+| `scale.go` | Xử lý dòng `W` / `EV` – phát hiện sự kiện, chụp ảnh, đẩy cảnh báo |
 | `camera.go` | Watchdog GStreamer: MJPEG → 4 frame mới nhất trong `/dev/shm`, tự dò lại khi rút/cắm camera |
-| `store.go` | SQLite: bảng `events` + hàng đợi Telegram (`tg_sent`, `tg_retries`, `tg_next_at`) |
-| `telegram.go` | Gửi cảnh báo OVER / bật-tắt thủ công kèm ảnh; giãn cách, xử lý 429, retry lùi dần |
+| `telegram.go` | Hàng đợi cảnh báo trong RAM + gửi OVER / bật-tắt thủ công kèm ảnh |
 | `sysinfo.go` | Tin báo "hệ thống đã khởi động" (chỉ khi board vừa reboot) |
 | `config.go` | Đọc biến môi trường / file `.env` |
 
-Sự kiện có chụp ảnh: `OVER`, `MANUAL_ON`, `MANUAL_OFF`, `MANUAL_OPEN`, `MANUAL_CLOSE`. Gửi Telegram: `OVER`, `MANUAL_ON`, `MANUAL_OFF`.
+Sự kiện chụp ảnh + gửi Telegram: `OVER`, `MANUAL_ON`, `MANUAL_OFF` (kèm thời lượng phiên, số lần mở cổng). `PASS`, `LEAVE`, mở/đóng cổng tay, `ERR` chỉ ghi log.
+
+Hàng đợi cảnh báo:
+- Nằm trong RAM, tối đa `QUEUE_SIZE` cảnh báo; đầy thì bỏ cảnh báo cũ nhất.
+- Mỗi cảnh báo gửi **1 lần**; lỗi mạng / Telegram từ chối thì bỏ, không gửi lại. Riêng 429 (giới hạn tốc độ) thì chờ `retry_after` rồi gửi tiếp.
+- Launcher restart thì cảnh báo đang chờ trong hàng đợi bị mất.
 
 Yêu cầu trên board: `gstreamer1.0-tools` + plugin `v4l2src`/`multifilesink`, user thuộc nhóm `dialout` và `video`.
 
@@ -68,8 +72,9 @@ Copy `launcher/.env.example` thành `launcher/.env` và điền token Telegram. 
 
 | Biến | Mặc định |
 |---|---|
-| `TG_BOT_TOKEN`, `TG_CHAT_ID` | trống → chỉ lưu DB |
+| `TG_BOT_TOKEN`, `TG_CHAT_ID` | trống → chỉ ghi log |
 | `THRESHOLD_KG` | `0.15` |
+| `QUEUE_SIZE` | `50` |
 | `SERIAL_PORT` | `/dev/ttyACM0` |
 | `CAMERA_DEVICE` | `auto` |
 | `DATA_DIR` | `~/vehicle-scale-ptit/data` |

@@ -1,4 +1,4 @@
-# tools/vehicle-scale-launcher.service – launcher Go (serial MCU + camera + SQLite + Telegram), chạy native
+# tools/vehicle-scale-launcher.service – launcher Go (serial MCU + camera + cảnh báo Telegram), chạy native
 # Cài/cập nhật: ./tools/deploy.sh launcher (tự copy vào /etc/systemd/system và restart)
 # Log: journalctl -u vehicle-scale-launcher -f
 [Unit]

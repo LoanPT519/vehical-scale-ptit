@@ -50,7 +50,7 @@ deploy_launcher() {
   if [ -f "$ENV_FILE" ]; then
     ssh_q "umask 077; cat > ~/$RDIR/.env" < "$ENV_FILE"
   else
-    echo ">> Không có $ENV_FILE – launcher chạy không có Telegram (chỉ lưu SQLite)"
+    echo ">> Không có $ENV_FILE – launcher chạy không có Telegram (chỉ ghi log)"
   fi
   stop_launcher
   ssh_q "set -e; cd ~/$RDIR
