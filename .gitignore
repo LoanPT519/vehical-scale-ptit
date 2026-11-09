@@ -66,3 +66,10 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Dự án trạm cân
+.env
+.DS_Store
+launcher/bin/
+data/
+!go.mod
