@@ -14,8 +14,7 @@ import (
 // Config đọc từ biến môi trường; nếu có file .env trong thư mục chạy thì nạp thêm
 // (biến môi trường thật được ưu tiên hơn file).
 type Config struct {
-	DataDir      string // dữ liệu trên board: SQLite + ảnh sự kiện
-	DBPath       string
+	DataDir      string // dữ liệu trên board: ảnh sự kiện
 	ImageDir     string // ảnh sự kiện
 	CameraDir    string // GStreamer ghi vòng frame camera mới nhất vào đây (RAM)
 	CameraDevice string // "auto": tự dò webcam, chịu được rút/cắm lại
@@ -24,6 +23,7 @@ type Config struct {
 	StationName  string
 	TgToken      string
 	TgChatID     string
+	QueueSize    int // số cảnh báo tối đa chờ gửi trong RAM; đầy thì bỏ cái cũ nhất
 	Location     *time.Location
 }
 
@@ -80,10 +80,13 @@ func loadConfig() *Config {
 	if err != nil || th <= 0 {
 		log.Fatalf("THRESHOLD_KG không hợp lệ")
 	}
+	qs, err := strconv.Atoi(env("QUEUE_SIZE", "50"))
+	if err != nil || qs <= 0 {
+		log.Fatalf("QUEUE_SIZE không hợp lệ")
+	}
 	dataDir := expandHome(env("DATA_DIR", "~/vehicle-scale-ptit/data"))
 	return &Config{
 		DataDir:      dataDir,
-		DBPath:       expandHome(env("DB_PATH", filepath.Join(dataDir, "events.db"))),
 		ImageDir:     expandHome(env("IMAGE_DIR", filepath.Join(dataDir, "images"))),
 		CameraDir:    env("CAMERA_DIR", "/dev/shm/vehicle-scale-cam"),
 		CameraDevice: env("CAMERA_DEVICE", "auto"),
@@ -92,6 +95,7 @@ func loadConfig() *Config {
 		StationName:  env("STATION_NAME", "Trạm cân PTIT"),
 		TgToken:      os.Getenv("TG_BOT_TOKEN"),
 		TgChatID:     os.Getenv("TG_CHAT_ID"),
+		QueueSize:    qs,
 		Location:     loc,
 	}
 }

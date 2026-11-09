@@ -220,5 +220,5 @@ func sendStartup(cfg *Config, tg *TelegramWorker, live *Live, cam *Camera) {
 	if !synced {
 		text = strings.Replace(text, "\n", "\n⚠️ <i>Giờ chưa đồng bộ NTP – thời gian có thể sai</i>\n", 1)
 	}
-	tg.Notify(text, photo)
+	tg.Push(Alert{Kind: "SYSTEM", Ts: time.Now(), Text: text, Photo: photo})
 }

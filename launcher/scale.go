@@ -9,25 +9,29 @@ import (
 	"time"
 )
 
-// Scale xử lý dòng từ MCU: W (telemetry 5 Hz) → Live; EV (sự kiện) → chụp ảnh + ghi SQLite (+ outbox Telegram).
+// Scale xử lý dòng từ MCU: W (telemetry 5 Hz) → Live; EV (sự kiện) → chụp ảnh + đẩy cảnh báo vào hàng đợi Telegram.
+// Không lưu DB: PASS / LEAVE / thao tác cổng / lỗi chỉ ghi log.
 //
 //	W,<kg>,<trạng thái>,<cổng 1=mở 2=đóng>
 //	EV,OVER,<kg> | EV,PASS,<kg> | EV,LEAVE | EV,MANUAL,ENTER|EXIT|OPEN|CLOSE | EV,AUTOZERO,<kg> | EV,ERR,<mã>
 type Scale struct {
-	cfg   *Config
-	live  *Live
-	cam   *Camera
-	store *Store
+	cfg  *Config
+	live *Live
+	cam  *Camera
+	tg   *TelegramWorker // nil nếu chưa cấu hình Telegram
 
 	lastW     time.Time
 	lastKg    float64
 	lastState string
 	lastGate  string
 	warned    bool
+
+	manualOn time.Time // phiên thủ công đang mở (để báo thời lượng, số lần mở cổng khi tắt)
+	opens    int
 }
 
-func newScale(cfg *Config, live *Live, cam *Camera, store *Store) *Scale {
-	return &Scale{cfg: cfg, live: live, cam: cam, store: store, lastW: time.Now()}
+func newScale(cfg *Config, live *Live, cam *Camera, tg *TelegramWorker) *Scale {
+	return &Scale{cfg: cfg, live: live, cam: cam, tg: tg, lastW: time.Now()}
 }
 
 func parseKg(parts []string, i int) (float64, bool) {
@@ -38,21 +42,15 @@ func parseKg(parts []string, i int) (float64, bool) {
 	return v, err == nil
 }
 
-// takePhoto copy frame camera mới nhất ra thư mục ảnh; trả đường dẫn tương đối trong ImageDir ("" nếu không có).
+// takePhoto copy frame camera mới nhất ra thư mục ảnh; trả đường dẫn tuyệt đối ("" nếu không có).
 func (s *Scale) takePhoto(now time.Time) string {
-	rel := filepath.Join(now.Format("2006/01/02"), fmt.Sprintf("%s_%03d.jpg", now.Format("150405"), now.Nanosecond()/1e6))
-	if err := s.cam.Snapshot(filepath.Join(s.cfg.ImageDir, rel)); err != nil {
-		log.Printf("Lỗi lưu ảnh (%v) – lưu sự kiện không ảnh", err)
+	path := filepath.Join(s.cfg.ImageDir, now.Format("2006/01/02"),
+		fmt.Sprintf("%s_%03d.jpg", now.Format("150405"), now.Nanosecond()/1e6))
+	if err := s.cam.Snapshot(path); err != nil {
+		log.Printf("Lỗi lưu ảnh (%v) – cảnh báo không kèm ảnh", err)
 		return ""
 	}
-	return rel
-}
-
-func idStr(id uint) string {
-	if id == 0 {
-		return "(lỗi ghi DB)"
-	}
-	return fmt.Sprintf("#%d", id)
+	return path
 }
 
 func (s *Scale) Handle(line string) {
@@ -107,7 +105,6 @@ func (s *Scale) Handle(line string) {
 		arg = parts[2]
 	}
 	now := time.Now().In(s.cfg.Location)
-	th := s.cfg.ThresholdKg
 	switch {
 	case ev == "OVER":
 		kg, ok := parseKg(parts, 2)
@@ -115,34 +112,35 @@ func (s *Scale) Handle(line string) {
 			kg = s.lastKg
 		}
 		img := s.takePhoto(now)
-		id := s.store.Insert(now, kg, th, "OVER", img)
-		log.Printf("%s QUÁ TẢI %.3f kg – ảnh: %s", idStr(id), kg, img)
+		s.tg.Push(Alert{Kind: "OVER", Ts: now, WeightKg: kg, Photo: img})
+		log.Printf("QUÁ TẢI %.3f kg – ảnh: %s", kg, img)
 	case ev == "PASS":
 		kg, ok := parseKg(parts, 2)
 		if !ok {
 			kg = s.lastKg
 		}
-		id := s.store.Insert(now, kg, th, "PASS", "")
-		log.Printf("%s PASS %.3f kg", idStr(id), kg)
-	case ev == "MANUAL" && (arg == "ENTER" || arg == "EXIT"):
-		img := s.takePhoto(now) // bật/tắt chế độ thủ công → lưu + cảnh báo Telegram
-		status, vi := "MANUAL_ON", "BẬT"
-		if arg == "EXIT" {
-			status, vi = "MANUAL_OFF", "TẮT"
-		}
-		id := s.store.Insert(now, s.lastKg, th, status, img)
-		log.Printf("%s %s chế độ thủ công – ảnh: %s", idStr(id), vi, img)
+		log.Printf("PASS %.3f kg", kg)
+	case ev == "MANUAL" && arg == "ENTER":
+		img := s.takePhoto(now)
+		s.manualOn, s.opens = now, 0
+		s.tg.Push(Alert{Kind: "MANUAL_ON", Ts: now, WeightKg: s.lastKg, Photo: img})
+		log.Printf("BẬT chế độ thủ công – ảnh: %s", img)
+	case ev == "MANUAL" && arg == "EXIT":
+		img := s.takePhoto(now)
+		s.tg.Push(Alert{Kind: "MANUAL_OFF", Ts: now, WeightKg: s.lastKg, Photo: img,
+			ManualOn: s.manualOn, Opens: s.opens})
+		s.manualOn, s.opens = time.Time{}, 0
+		log.Printf("TẮT chế độ thủ công – ảnh: %s", img)
 	case ev == "MANUAL" && (arg == "OPEN" || arg == "CLOSE"):
-		img := s.takePhoto(now) // chụp cả lúc mở và lúc đóng cổng bằng tay
-		s.store.Insert(now, s.lastKg, th, "MANUAL_"+arg, img)
-		log.Printf("Điều khiển tay: %s – ảnh: %s", arg, img)
+		if arg == "OPEN" {
+			s.opens++
+		}
+		log.Printf("Điều khiển tay: %s", arg)
 	case ev == "LEAVE":
-		s.store.SetLeave(now)
 		log.Printf("Xe rời cân")
 	case ev == "AUTOZERO":
 		log.Printf("Cân bị âm (%s kg) – MCU tự lấy lại mốc 0", arg)
 	case ev == "ERR":
-		s.store.Insert(now, 0, th, "ERR", "")
 		log.Printf("MCU báo lỗi: %s", line)
 	default:
 		log.Printf("Sự kiện: %s", line)
