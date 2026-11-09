@@ -4,7 +4,7 @@ Hệ thống giám sát trọng tải xe (Trạm cân PTIT) trên **LattePanda V
 
 - `firmware/` – firmware cho **Arduino Leonardo onboard** (ATmega32U4): load cell + HX711, LED matrix MAX7219, WS2812B, servo barrier, joystick.
 - `launcher/` – dịch vụ **Go** chạy native trên LattePanda: đọc sự kiện từ Arduino qua serial → chụp ảnh camera USB → đẩy cảnh báo vào hàng đợi RAM → gửi Telegram. Không dùng DB.
-- `tools/` – script build/nạp/triển khai từ Mac lên board và unit systemd.
+- `tools/` – script build/nạp/triển khai lên board và unit systemd.
 
 ```
 Load cell ─ HX711 ─┐
@@ -80,7 +80,7 @@ Copy `launcher/.env.example` thành `launcher/.env` và điền token Telegram. 
 | `DATA_DIR` | `~/vehicle-scale-ptit/data` |
 | `STATION_NAME` | `Trạm cân PTIT` |
 
-## Triển khai (từ Mac)
+## Triển khai
 
 ```bash
 ./tools/deploy.sh fw         # build firmware + nạp Arduino

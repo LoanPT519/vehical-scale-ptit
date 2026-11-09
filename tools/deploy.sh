@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Triển khai từ Mac lên LattePanda qua SSH.
+# Triển khai lên LattePanda qua SSH.
 # Dùng (từ thư mục gốc repo):
 #   ./tools/deploy.sh fw         # build firmware bằng arduino-cli + nạp Arduino Leonardo onboard
 #   ./tools/deploy.sh launcher   # build launcher Go (linux/amd64) + cài systemd
