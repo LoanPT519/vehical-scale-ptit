@@ -1,0 +1,20 @@
+# tools/vehicle-scale-launcher.service – launcher Go (serial MCU + camera + SQLite + Telegram), chạy native
+# Cài/cập nhật: ./tools/deploy.sh launcher (tự copy vào /etc/systemd/system và restart)
+# Log: journalctl -u vehicle-scale-launcher -f
+[Unit]
+Description=Vehicle scale launcher (Tram can PTIT)
+After=network.target
+
+[Service]
+User=simon
+SupplementaryGroups=dialout video
+WorkingDirectory=/home/simon/vehicle-scale-ptit
+Environment=TZ=Asia/Ho_Chi_Minh GOMEMLIMIT=64MiB
+ExecStart=/home/simon/vehicle-scale-ptit/vehicle-scale-launcher
+Restart=always
+RestartSec=3
+MemoryLimit=128M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
